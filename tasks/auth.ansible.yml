@@ -13,12 +13,22 @@
 # and documents only "accessible only by creator" - it does not guarantee
 # 0600 specifically, so permissions are not relied upon here; the copy
 # below sets them explicitly.
+#
+# check_mode: false on this trio: ansible.builtin.tempfile does not support
+# check mode at all, so under --check it would be skipped, leaving
+# maintenance_oci_backup_key_tempfile undefined and the copy/cleanup tasks
+# templating an undefined path. Creating and removing a throwaway temp file
+# is side-effect-free (nothing durable changes on the controller), so
+# forcing real execution here even under --check is safe, and it's what
+# lets a --check --diff run do genuine read-only OCI discovery afterward
+# instead of failing before it starts.
 - name: Create a temp file to hold the OCI API signing key on the controller
   ansible.builtin.tempfile:
     state: file
     suffix: .pem
   delegate_to: localhost
   become: false
+  check_mode: false
   register: maintenance_oci_backup_key_tempfile
 
 # mode: '0600' is what actually enforces the permission (not the tempfile
@@ -32,6 +42,7 @@
     mode: '0600'
   delegate_to: localhost
   become: false
+  check_mode: false
   no_log: true
 
 - name: Record the signing key file path for backup/prune tasks
@@ -59,3 +70,4 @@
         state: absent
       delegate_to: localhost
       become: false
+      check_mode: false

@@ -37,6 +37,11 @@
   run_once: true
   register: maintenance_oci_backup_all_boot_backups
 
+# Pruning is deliberately NOT gated on _include_block_volumes: it targets
+# whatever this role has EVER created in the compartment (by name prefix +
+# age), not just what the current run's backup step would create. A caller
+# who turns block-volume backups off later must not silently stop pruning
+# the block backups already sitting in the compartment from before.
 - name: List block volume backups in the compartment
   oracle.oci.oci_blockstorage_volume_backup_facts:
     compartment_id: "{{ maintenance_oci_backup_compartment_id }}"
@@ -48,7 +53,6 @@
   delegate_to: localhost
   become: false
   run_once: true
-  when: maintenance_oci_backup_include_block_volumes | bool
   register: maintenance_oci_backup_all_block_backups
 
 # Mirrors the cutoff-epoch-filtering idiom already used by
@@ -88,7 +92,6 @@
       {%- endfor -%}
       {{ result }}
   run_once: true
-  when: maintenance_oci_backup_include_block_volumes | bool
 
 # Honour _prune_dry_run by reporting the delete set without acting.
 - name: Report boot volume backups that would be pruned (dry run)
@@ -107,9 +110,7 @@
   loop_control:
     label: "{{ item.display_name }}"
   run_once: true
-  when:
-    - maintenance_oci_backup_include_block_volumes | bool
-    - maintenance_oci_backup_prune_dry_run | bool
+  when: maintenance_oci_backup_prune_dry_run | bool
 
 - name: Delete expired boot volume backups
   oracle.oci.oci_blockstorage_boot_volume_backup:
@@ -144,7 +145,5 @@
   delegate_to: localhost
   become: false
   run_once: true
-  when:
-    - maintenance_oci_backup_include_block_volumes | bool
-    - not (maintenance_oci_backup_prune_dry_run | bool)
+  when: not (maintenance_oci_backup_prune_dry_run | bool)
   ignore_errors: "{{ ansible_check_mode }}"

@@ -116,7 +116,7 @@
     api_user: "{{ maintenance_oci_backup_api_user }}"
     api_user_fingerprint: "{{ maintenance_oci_backup_api_user_fingerprint }}"
     api_user_key_file: "{{ maintenance_oci_backup_key_file }}"
-  loop: "{{ maintenance_oci_backup_volume_attachments.volume_attachments }}"
+  loop: "{{ maintenance_oci_backup_volume_attachments.volume_attachments | default([]) }}"
   loop_control:
     label: "{{ item.volume_id }}"
   delegate_to: localhost
@@ -146,7 +146,7 @@
     api_user: "{{ maintenance_oci_backup_api_user }}"
     api_user_fingerprint: "{{ maintenance_oci_backup_api_user_fingerprint }}"
     api_user_key_file: "{{ maintenance_oci_backup_key_file }}"
-  loop: "{{ maintenance_oci_backup_block_volume_facts.results }}"
+  loop: "{{ maintenance_oci_backup_block_volume_facts.results | default([]) }}"
   loop_control:
     label: "{{ item.item.volume_id }}"
   delegate_to: localhost
@@ -204,7 +204,7 @@
     api_user: "{{ maintenance_oci_backup_api_user }}"
     api_user_fingerprint: "{{ maintenance_oci_backup_api_user_fingerprint }}"
     api_user_key_file: "{{ maintenance_oci_backup_key_file }}"
-  loop: "{{ maintenance_oci_backup_block_volume_facts.results }}"
+  loop: "{{ maintenance_oci_backup_block_volume_facts.results | default([]) }}"
   loop_control:
     label: "{{ item.item.volume_id }}"
   delegate_to: localhost
@@ -221,7 +221,7 @@
       A backup task that ran without producing a verified restore point must not report
       success (invariant I1).
     success_msg: "Volume {{ item.item.item.volume_id }} has an AVAILABLE backup."
-  loop: "{{ maintenance_oci_backup_block_backup_check.results }}"
+  loop: "{{ maintenance_oci_backup_block_backup_check.results | default([]) }}"
   loop_control:
     label: "{{ item.item.item.volume_id }}"
   when: maintenance_oci_backup_include_block_volumes | bool
