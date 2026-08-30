@@ -1,0 +1,8 @@
+---
+- name: Test maintenance_oci_backup - disabled (default posture, no OCI credentials needed)
+  hosts: localhost
+  connection: local
+  vars:
+    maintenance_oci_backup_enable: false
+  roles:
+    - guiand888.maintenance_oci_backup

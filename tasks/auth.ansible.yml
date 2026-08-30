@@ -1,0 +1,61 @@
+---
+# tasks file for auth
+
+# The oracle.oci Ansible collection's module argument spec (confirmed
+# directly in oci_common_utils.py) only exposes api_user_key_file, a file
+# path - there is no api_user_key_content module option, so a file on disk
+# is the only door through this collection, not a shortcut taken for
+# convenience.
+
+# Because the whole role runs delegate_to: localhost, this creates the file
+# on the controller - never on the managed host. It honors TMPDIR/TEMP/TMP
+# if set, else the system temp dir. The module takes no `mode` parameter
+# and documents only "accessible only by creator" - it does not guarantee
+# 0600 specifically, so permissions are not relied upon here; the copy
+# below sets them explicitly.
+- name: Create a temp file to hold the OCI API signing key on the controller
+  ansible.builtin.tempfile:
+    state: file
+    suffix: .pem
+  delegate_to: localhost
+  become: false
+  register: maintenance_oci_backup_key_tempfile
+
+# mode: '0600' is what actually enforces the permission (not the tempfile
+# module's default). no_log: true because the copy module itself doesn't
+# advertise no_log support - the safety comes from this surrounding task,
+# not the module.
+- name: Write the vaulted API signing key into the temp file with explicit permissions
+  ansible.builtin.copy:
+    dest: "{{ maintenance_oci_backup_key_tempfile.path }}"
+    content: "{{ maintenance_oci_backup_api_user_key_content }}"
+    mode: '0600'
+  delegate_to: localhost
+  become: false
+  no_log: true
+
+- name: Record the signing key file path for backup/prune tasks
+  ansible.builtin.set_fact:
+    maintenance_oci_backup_key_file: "{{ maintenance_oci_backup_key_tempfile.path }}"
+
+# Deliberate deviation from this corpus's usual pattern of using block:
+# only to share a `when:`, never `rescue:`/`always:`. Here the block/always
+# pair is load-bearing: leaving a private key on disk on the controller
+# after a failed run is unacceptable, so the temp file removal in `always:`
+# below must run even when backup/prune fails.
+- name: Run backup and prune tasks, always cleaning up the signing key file afterward
+  block:
+    - name: Include backup tasks
+      ansible.builtin.include_tasks: backup.ansible.yml
+      when: maintenance_oci_backup_run_backup | bool
+
+    - name: Include prune tasks
+      ansible.builtin.include_tasks: prune.ansible.yml
+      when: maintenance_oci_backup_run_prune | bool
+  always:
+    - name: Remove the temp file holding the OCI API signing key
+      ansible.builtin.file:
+        path: "{{ maintenance_oci_backup_key_tempfile.path }}"
+        state: absent
+      delegate_to: localhost
+      become: false

@@ -1,0 +1,31 @@
+---
+extends: default
+
+ignore: |
+  .ansible/
+  .direnv/
+  attic/
+
+rules:
+  # 220, not the more common 160: several playbooks embed literal file
+  # payloads (bash scripts, autofs maps, docker-compose) as copy/lineinfile
+  # content. Wrapping those lines would corrupt what gets deployed, and a
+  # `# noqa` comment inside a content: block becomes literal file content —
+  # so the limit is set to fit what's actually here instead.
+  line-length:
+    max: 225
+    level: warning
+  braces:
+    max-spaces-inside: 1
+  truthy:
+    allowed-values: ["true", "false"]
+  comments:
+    min-spaces-from-content: 1
+  # ansible-lint's yaml rule requires these two exact settings, or it treats
+  # this whole file as incompatible and silently falls back to its own
+  # bundled yamllint config instead — see:
+  # https://ansible.readthedocs.io/projects/lint/rules/yaml/
+  comments-indentation: false
+  octal-values:
+    forbid-implicit-octal: true
+    forbid-explicit-octal: true

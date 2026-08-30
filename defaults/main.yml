@@ -1,0 +1,75 @@
+---
+# defaults file for maintenance_oci_backup
+
+# Master switch. When false, this role does nothing at all — including the
+# required-variable assert (see tasks/main.yml and tasks/assert.ansible.yml).
+# That gating exists specifically so tests/test.yml can exercise the
+# dispatcher/lint gates with maintenance_oci_backup_enable: false and no OCI
+# credentials at all.
+maintenance_oci_backup_enable: true
+
+# Take a backup this run. On by default: this role's core purpose is
+# non-destructive (it only ever creates and reads backups when this is the
+# only switch flipped). The wiring in phases/p1_backup.yml sets this true
+# explicitly anyway; phases/p0_preflight.yml sets it false explicitly when
+# only pruning should run there.
+maintenance_oci_backup_run_backup: true
+
+# Prune old backups this run. Off by default — deletion is opt-in, never
+# a silent side effect of taking a backup.
+maintenance_oci_backup_run_prune: false
+
+# Report what pruning WOULD delete without deleting it. On by default so an
+# operator flips maintenance_oci_backup_run_prune on first with this still
+# true, reviews the report, and only then sets this false for a real prune.
+maintenance_oci_backup_prune_dry_run: true
+
+# --- Required when maintenance_oci_backup_run_backup is true ---
+# The OCID of the compute instance to back up. No safe default; enforced by
+# tasks/assert.ansible.yml.
+maintenance_oci_backup_instance_id: ""
+
+# --- Required whenever the role does anything (backup or prune) ---
+# The OCID of the compartment the instance/backups live in. No safe
+# default; enforced by tasks/assert.ansible.yml.
+maintenance_oci_backup_compartment_id: ""
+
+# --- Auth (see tasks/auth.ansible.yml) ---
+# Oracle's documented API-key auth for a control node outside OCI. No safe
+# defaults for any of these; all required, enforced by
+# tasks/assert.ansible.yml.
+maintenance_oci_backup_tenancy: ""
+maintenance_oci_backup_region: ""
+maintenance_oci_backup_api_user: ""
+maintenance_oci_backup_api_user_fingerprint: ""
+# The PEM-formatted private key content itself (not a path — see
+# tasks/auth.ansible.yml for why the collection needs a path and how this
+# gets materialized to one). Expected to arrive already vault-encrypted
+# from the caller (ansible-gafr's group_vars/gafr_oci/vault.yml).
+maintenance_oci_backup_api_user_key_content: ""
+
+# --- Naming (see README "Naming" and tasks/backup.ansible.yml) ---
+# Every object this role creates is named maint-*, so pruning can be scoped
+# safely to only ever touch objects this role created.
+maintenance_oci_backup_name_prefix: "maint"
+
+# --- Backup shape ---
+# INCREMENTAL is the OCI-recommended default; a FULL backup is also always
+# available as the source and doesn't need re-backing-up in full every run.
+maintenance_oci_backup_type: "INCREMENTAL"
+
+# Manual backups never expire on their own (only policy-based ones do), so
+# this role deletes them itself once they're older than this many days.
+# Must be > 0 — enforced by tasks/prune.ansible.yml.
+maintenance_oci_backup_retention_days: 14
+
+# Back up every block volume attached to the instance, not just the boot
+# volume. Opt-out, not opt-in: a data volume with no backup at all is
+# exactly the gap this role exists to close.
+maintenance_oci_backup_include_block_volumes: true
+
+# Wait for each backup to reach a terminal state before moving on, so the
+# facts-based assert in tasks/backup.ansible.yml (step 6) sees the true
+# final state rather than a still-CREATING backup.
+maintenance_oci_backup_wait: true
+maintenance_oci_backup_wait_timeout: 1800

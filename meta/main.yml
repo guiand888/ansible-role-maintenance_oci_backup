@@ -1,0 +1,38 @@
+---
+galaxy_info:
+  role_name: maintenance_oci_backup
+  namespace: guiand888
+  author: Guillaume Andre
+  description: Monthly, gate-quality Oracle Cloud Infrastructure backup of an instance's boot volume and attached block volumes, with opt-in, retention-based, compartment-scoped pruning of the backups this role creates.
+  company: Forward Systems
+  issue_tracker_url: https://github.com/guiand888/ansible-role-maintenance_oci_backup/issues
+  license: AGPL-3.0-only
+  min_ansible_version: "2.12"
+
+  platforms:
+    - name: EL
+      versions:
+        - "8"
+        - "9"
+    - name: Fedora
+      versions:
+        - all
+    - name: Debian
+      versions:
+        - bullseye
+        - bookworm
+    - name: Ubuntu
+      versions:
+        - focal
+        - jammy
+        - noble
+
+  galaxy_tags:
+    - oci
+    - oracle
+    - cloud
+    - backup
+    - blockstorage
+    - sysadmin
+
+dependencies: []

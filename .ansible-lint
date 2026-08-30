@@ -1,0 +1,9 @@
+---
+profile: production
+
+exclude_paths:
+  - .ansible/
+  - .direnv/
+
+warn_list:
+  - experimental

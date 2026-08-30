@@ -1,0 +1,150 @@
+---
+# tasks file for prune
+
+# Manual OCI backups never expire on their own (only policy-based ones do),
+# so without this task these bill indefinitely. Pruning is compartment-
+# scoped, not per-host, so run_once ensures it executes exactly once per
+# phase run instead of racing itself against the same compartment once per
+# target host (cloudoracle1, cloudoracle2) - delegate_to: localhost alone
+# would still run it twice, redundantly.
+- name: Assert retention_days is positive
+  ansible.builtin.assert:
+    that:
+      - maintenance_oci_backup_retention_days | int > 0
+    fail_msg: >-
+      maintenance_oci_backup_retention_days ({{ maintenance_oci_backup_retention_days }})
+      must be greater than 0. Manual OCI backups never expire on their own, so a
+      non-positive retention window is nonsensical here.
+    success_msg: "maintenance_oci_backup_retention_days is positive."
+  run_once: true
+
+- name: Compute the prune cutoff timestamp
+  ansible.builtin.set_fact:
+    maintenance_oci_backup_cutoff_epoch: >-
+      {{ ansible_facts['date_time'].epoch | int - (maintenance_oci_backup_retention_days | int * 86400) }}
+  run_once: true
+
+- name: List boot volume backups in the compartment
+  oracle.oci.oci_blockstorage_boot_volume_backup_facts:
+    compartment_id: "{{ maintenance_oci_backup_compartment_id }}"
+    tenancy: "{{ maintenance_oci_backup_tenancy }}"
+    region: "{{ maintenance_oci_backup_region }}"
+    api_user: "{{ maintenance_oci_backup_api_user }}"
+    api_user_fingerprint: "{{ maintenance_oci_backup_api_user_fingerprint }}"
+    api_user_key_file: "{{ maintenance_oci_backup_key_file }}"
+  delegate_to: localhost
+  become: false
+  run_once: true
+  register: maintenance_oci_backup_all_boot_backups
+
+- name: List block volume backups in the compartment
+  oracle.oci.oci_blockstorage_volume_backup_facts:
+    compartment_id: "{{ maintenance_oci_backup_compartment_id }}"
+    tenancy: "{{ maintenance_oci_backup_tenancy }}"
+    region: "{{ maintenance_oci_backup_region }}"
+    api_user: "{{ maintenance_oci_backup_api_user }}"
+    api_user_fingerprint: "{{ maintenance_oci_backup_api_user_fingerprint }}"
+    api_user_key_file: "{{ maintenance_oci_backup_key_file }}"
+  delegate_to: localhost
+  become: false
+  run_once: true
+  when: maintenance_oci_backup_include_block_volumes | bool
+  register: maintenance_oci_backup_all_block_backups
+
+# Mirrors the cutoff-epoch-filtering idiom already used by
+# playbooks/maintenance/mailcow_upgrade_openstack.yml in ansible-gafr,
+# adapted to this module's field names: `display_name` (not `name`) and
+# `time_created` (not `created_at`). time_created is RFC3339 with a
+# fractional-second + UTC-offset suffix (e.g. "2026-08-30T02:00:00.123Z"),
+# which to_datetime's strptime format can't parse directly - sliced to the
+# first 19 characters ("YYYY-MM-DDTHH:MM:SS") instead. Retention here is
+# 14 days, so the sub-second/timezone fuzz this discards is immaterial.
+- name: Filter boot volume backups eligible for pruning
+  ansible.builtin.set_fact:
+    maintenance_oci_backup_prune_boot_candidates: >
+      {%- set result = [] -%}
+      {%- for backup in maintenance_oci_backup_all_boot_backups.boot_volume_backups -%}
+        {%- if backup.display_name.startswith(maintenance_oci_backup_name_prefix ~ '-') -%}
+          {%- set created_epoch = (backup.time_created[:19] | to_datetime('%Y-%m-%dT%H:%M:%S')).strftime('%s') | int -%}
+          {%- if created_epoch <= maintenance_oci_backup_cutoff_epoch | int -%}
+            {%- set _ = result.append(backup) -%}
+          {%- endif -%}
+        {%- endif -%}
+      {%- endfor -%}
+      {{ result }}
+  run_once: true
+
+- name: Filter block volume backups eligible for pruning
+  ansible.builtin.set_fact:
+    maintenance_oci_backup_prune_block_candidates: >
+      {%- set result = [] -%}
+      {%- for backup in maintenance_oci_backup_all_block_backups.volume_backups -%}
+        {%- if backup.display_name.startswith(maintenance_oci_backup_name_prefix ~ '-') -%}
+          {%- set created_epoch = (backup.time_created[:19] | to_datetime('%Y-%m-%dT%H:%M:%S')).strftime('%s') | int -%}
+          {%- if created_epoch <= maintenance_oci_backup_cutoff_epoch | int -%}
+            {%- set _ = result.append(backup) -%}
+          {%- endif -%}
+        {%- endif -%}
+      {%- endfor -%}
+      {{ result }}
+  run_once: true
+  when: maintenance_oci_backup_include_block_volumes | bool
+
+# Honour _prune_dry_run by reporting the delete set without acting.
+- name: Report boot volume backups that would be pruned (dry run)
+  ansible.builtin.debug:
+    msg: "Would delete boot volume backup: {{ item.display_name }} (created {{ item.time_created }})"
+  loop: "{{ maintenance_oci_backup_prune_boot_candidates }}"
+  loop_control:
+    label: "{{ item.display_name }}"
+  run_once: true
+  when: maintenance_oci_backup_prune_dry_run | bool
+
+- name: Report block volume backups that would be pruned (dry run)
+  ansible.builtin.debug:
+    msg: "Would delete block volume backup: {{ item.display_name }} (created {{ item.time_created }})"
+  loop: "{{ maintenance_oci_backup_prune_block_candidates }}"
+  loop_control:
+    label: "{{ item.display_name }}"
+  run_once: true
+  when:
+    - maintenance_oci_backup_include_block_volumes | bool
+    - maintenance_oci_backup_prune_dry_run | bool
+
+- name: Delete expired boot volume backups
+  oracle.oci.oci_blockstorage_boot_volume_backup:
+    boot_volume_backup_id: "{{ item.id }}"
+    state: absent
+    tenancy: "{{ maintenance_oci_backup_tenancy }}"
+    region: "{{ maintenance_oci_backup_region }}"
+    api_user: "{{ maintenance_oci_backup_api_user }}"
+    api_user_fingerprint: "{{ maintenance_oci_backup_api_user_fingerprint }}"
+    api_user_key_file: "{{ maintenance_oci_backup_key_file }}"
+  loop: "{{ maintenance_oci_backup_prune_boot_candidates }}"
+  loop_control:
+    label: "{{ item.display_name }}"
+  delegate_to: localhost
+  become: false
+  run_once: true
+  when: not (maintenance_oci_backup_prune_dry_run | bool)
+  ignore_errors: "{{ ansible_check_mode }}"
+
+- name: Delete expired block volume backups
+  oracle.oci.oci_blockstorage_volume_backup:
+    volume_backup_id: "{{ item.id }}"
+    state: absent
+    tenancy: "{{ maintenance_oci_backup_tenancy }}"
+    region: "{{ maintenance_oci_backup_region }}"
+    api_user: "{{ maintenance_oci_backup_api_user }}"
+    api_user_fingerprint: "{{ maintenance_oci_backup_api_user_fingerprint }}"
+    api_user_key_file: "{{ maintenance_oci_backup_key_file }}"
+  loop: "{{ maintenance_oci_backup_prune_block_candidates }}"
+  loop_control:
+    label: "{{ item.display_name }}"
+  delegate_to: localhost
+  become: false
+  run_once: true
+  when:
+    - maintenance_oci_backup_include_block_volumes | bool
+    - not (maintenance_oci_backup_prune_dry_run | bool)
+  ignore_errors: "{{ ansible_check_mode }}"

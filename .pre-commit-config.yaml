@@ -1,0 +1,37 @@
+---
+# All tool versions are pinned once, in flake.nix — not here. Hooks below run
+# `language: system`, i.e. whatever's on PATH from the nix devShell (loaded
+# by direnv). Requires `direnv allow` once per clone; `pre-commit install`
+# after that.
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-merge-conflict
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: check-added-large-files
+        args: ["--maxkb=512"]
+      - id: mixed-line-ending
+
+  - repo: local
+    hooks:
+      - id: yamllint
+        name: yamllint
+        language: system
+        entry: yamllint -c .yamllint
+        types: [yaml]
+
+      - id: ansible-lint
+        name: ansible-lint
+        language: system
+        entry: ansible-lint
+        pass_filenames: false
+        files: ^(tasks|handlers|defaults|vars|meta|tests)/.*\.ya?ml$
+
+      - id: gitleaks
+        name: gitleaks
+        language: system
+        entry: gitleaks protect --staged --config .gitleaks.toml --redact
+        pass_filenames: false

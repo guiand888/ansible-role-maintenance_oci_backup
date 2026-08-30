@@ -1,0 +1,228 @@
+---
+# tasks file for backup
+
+# Step 0 (not in the original 6-step design, added after checking the
+# installed oracle.oci 5.5.0 collection's own argument spec):
+# oci_compute_boot_volume_attachment_facts requires BOTH compartment_id AND
+# availability_domain to list — unlike oci_compute_volume_attachment_facts,
+# which only requires compartment_id. availability_domain is a property of
+# the instance, not something the caller is expected to already know, so
+# it's fetched here via a get-by-instance_id call, which needs no
+# availability_domain of its own.
+- name: Fetch instance facts to determine its availability domain
+  oracle.oci.oci_compute_instance_facts:
+    instance_id: "{{ maintenance_oci_backup_instance_id }}"
+    tenancy: "{{ maintenance_oci_backup_tenancy }}"
+    region: "{{ maintenance_oci_backup_region }}"
+    api_user: "{{ maintenance_oci_backup_api_user }}"
+    api_user_fingerprint: "{{ maintenance_oci_backup_api_user_fingerprint }}"
+    api_user_key_file: "{{ maintenance_oci_backup_key_file }}"
+  delegate_to: localhost
+  become: false
+  register: maintenance_oci_backup_instance_facts
+
+# Step 1: boot volume attachment facts -> boot volume OCID.
+- name: Fetch boot volume attachment facts for the instance
+  oracle.oci.oci_compute_boot_volume_attachment_facts:
+    compartment_id: "{{ maintenance_oci_backup_compartment_id }}"
+    availability_domain: "{{ maintenance_oci_backup_instance_facts.instances[0].availability_domain }}"
+    instance_id: "{{ maintenance_oci_backup_instance_id }}"
+    tenancy: "{{ maintenance_oci_backup_tenancy }}"
+    region: "{{ maintenance_oci_backup_region }}"
+    api_user: "{{ maintenance_oci_backup_api_user }}"
+    api_user_fingerprint: "{{ maintenance_oci_backup_api_user_fingerprint }}"
+    api_user_key_file: "{{ maintenance_oci_backup_key_file }}"
+  delegate_to: localhost
+  become: false
+  register: maintenance_oci_backup_boot_attachments
+
+# Step 2: block volume attachment facts -> attached block volume OCIDs.
+- name: Fetch block volume attachment facts for the instance
+  oracle.oci.oci_compute_volume_attachment_facts:
+    compartment_id: "{{ maintenance_oci_backup_compartment_id }}"
+    instance_id: "{{ maintenance_oci_backup_instance_id }}"
+    tenancy: "{{ maintenance_oci_backup_tenancy }}"
+    region: "{{ maintenance_oci_backup_region }}"
+    api_user: "{{ maintenance_oci_backup_api_user }}"
+    api_user_fingerprint: "{{ maintenance_oci_backup_api_user_fingerprint }}"
+    api_user_key_file: "{{ maintenance_oci_backup_key_file }}"
+  delegate_to: localhost
+  become: false
+  when: maintenance_oci_backup_include_block_volumes | bool
+  register: maintenance_oci_backup_volume_attachments
+
+# Step 3: a zero-result discovery must fail the gate, never pass quietly.
+- name: Assert at least one boot volume was discovered
+  ansible.builtin.assert:
+    that:
+      - maintenance_oci_backup_boot_attachments.boot_volume_attachments | length > 0
+    fail_msg: >-
+      No boot volume attachment was found for instance
+      {{ maintenance_oci_backup_instance_id }} in compartment
+      {{ maintenance_oci_backup_compartment_id }}. A zero-result discovery
+      must fail loudly rather than silently backing up nothing.
+    success_msg: >-
+      {{ maintenance_oci_backup_boot_attachments.boot_volume_attachments | length }}
+      boot volume attachment(s) discovered.
+
+# Per README "Naming": maint-<host_short>-boot-<YYYYMMDD>. A single
+# date-stamped name per volume per day is what makes the module's native
+# idempotency (same input params -> no-op) do the right thing on retry.
+- name: Determine today's expected boot volume backup name
+  ansible.builtin.set_fact:
+    maintenance_oci_backup_boot_backup_name: >-
+      {{ maintenance_oci_backup_name_prefix }}-{{ inventory_hostname_short }}-boot-{{
+      ansible_facts['date_time'].date | replace('-', '') }}
+
+# Step 4: create boot backup(s). Explicitly NOT using force_create -
+# idempotency is the desired behaviour: re-running this phase after a
+# mid-window failure must not mint duplicate billable backups.
+- name: Create boot volume backup(s)
+  oracle.oci.oci_blockstorage_boot_volume_backup:
+    boot_volume_id: "{{ item.boot_volume_id }}"
+    compartment_id: "{{ maintenance_oci_backup_compartment_id }}"
+    display_name: "{{ maintenance_oci_backup_boot_backup_name }}"
+    type: "{{ maintenance_oci_backup_type }}"
+    freeform_tags:
+      managed_by: maintenance_oci_backup
+      instance_id: "{{ maintenance_oci_backup_instance_id }}"
+    key_by:
+      - boot_volume_id
+      - display_name
+    wait: "{{ maintenance_oci_backup_wait }}"
+    wait_timeout: "{{ maintenance_oci_backup_wait_timeout }}"
+    tenancy: "{{ maintenance_oci_backup_tenancy }}"
+    region: "{{ maintenance_oci_backup_region }}"
+    api_user: "{{ maintenance_oci_backup_api_user }}"
+    api_user_fingerprint: "{{ maintenance_oci_backup_api_user_fingerprint }}"
+    api_user_key_file: "{{ maintenance_oci_backup_key_file }}"
+  loop: "{{ maintenance_oci_backup_boot_attachments.boot_volume_attachments }}"
+  loop_control:
+    label: "{{ item.boot_volume_id }}"
+  delegate_to: localhost
+  become: false
+  register: maintenance_oci_backup_boot_backup_result
+  ignore_errors: "{{ ansible_check_mode }}"
+
+# The volume ATTACHMENT's own display_name is the attachment's name, not
+# the underlying volume's - verified against the installed collection's
+# RETURN docs. The actual volume display_name (used in the block backup's
+# name per README "Naming") needs its own lookup.
+- name: Fetch attached block volumes' own display names
+  oracle.oci.oci_blockstorage_volume_facts:
+    volume_id: "{{ item.volume_id }}"
+    tenancy: "{{ maintenance_oci_backup_tenancy }}"
+    region: "{{ maintenance_oci_backup_region }}"
+    api_user: "{{ maintenance_oci_backup_api_user }}"
+    api_user_fingerprint: "{{ maintenance_oci_backup_api_user_fingerprint }}"
+    api_user_key_file: "{{ maintenance_oci_backup_key_file }}"
+  loop: "{{ maintenance_oci_backup_volume_attachments.volume_attachments }}"
+  loop_control:
+    label: "{{ item.volume_id }}"
+  delegate_to: localhost
+  become: false
+  when: maintenance_oci_backup_include_block_volumes | bool
+  register: maintenance_oci_backup_block_volume_facts
+
+# Step 5: create block backups, gated on _include_block_volumes.
+- name: Create block volume backup(s)
+  oracle.oci.oci_blockstorage_volume_backup:
+    volume_id: "{{ item.item.volume_id }}"
+    compartment_id: "{{ maintenance_oci_backup_compartment_id }}"
+    display_name: >-
+      {{ maintenance_oci_backup_name_prefix }}-{{ inventory_hostname_short }}-block-{{
+      item.volumes[0].display_name }}-{{ ansible_facts['date_time'].date | replace('-', '') }}
+    type: "{{ maintenance_oci_backup_type }}"
+    freeform_tags:
+      managed_by: maintenance_oci_backup
+      instance_id: "{{ maintenance_oci_backup_instance_id }}"
+    key_by:
+      - volume_id
+      - display_name
+    wait: "{{ maintenance_oci_backup_wait }}"
+    wait_timeout: "{{ maintenance_oci_backup_wait_timeout }}"
+    tenancy: "{{ maintenance_oci_backup_tenancy }}"
+    region: "{{ maintenance_oci_backup_region }}"
+    api_user: "{{ maintenance_oci_backup_api_user }}"
+    api_user_fingerprint: "{{ maintenance_oci_backup_api_user_fingerprint }}"
+    api_user_key_file: "{{ maintenance_oci_backup_key_file }}"
+  loop: "{{ maintenance_oci_backup_block_volume_facts.results }}"
+  loop_control:
+    label: "{{ item.item.volume_id }}"
+  delegate_to: localhost
+  become: false
+  when: maintenance_oci_backup_include_block_volumes | bool
+  register: maintenance_oci_backup_block_backup_result
+  ignore_errors: "{{ ansible_check_mode }}"
+
+# Step 6: this is the actual I1 gate. Without it, a silently skipped create
+# still reports success. Re-fetches by the exact expected display_name
+# (which the facts modules filter on server-side) rather than parsing
+# timestamps, so the check is self-consistent with what was just created.
+- name: Fetch today's boot volume backup by exact name to confirm it is AVAILABLE
+  oracle.oci.oci_blockstorage_boot_volume_backup_facts:
+    compartment_id: "{{ maintenance_oci_backup_compartment_id }}"
+    boot_volume_id: "{{ item.boot_volume_id }}"
+    display_name: "{{ maintenance_oci_backup_boot_backup_name }}"
+    tenancy: "{{ maintenance_oci_backup_tenancy }}"
+    region: "{{ maintenance_oci_backup_region }}"
+    api_user: "{{ maintenance_oci_backup_api_user }}"
+    api_user_fingerprint: "{{ maintenance_oci_backup_api_user_fingerprint }}"
+    api_user_key_file: "{{ maintenance_oci_backup_key_file }}"
+  loop: "{{ maintenance_oci_backup_boot_attachments.boot_volume_attachments }}"
+  loop_control:
+    label: "{{ item.boot_volume_id }}"
+  delegate_to: localhost
+  become: false
+  register: maintenance_oci_backup_boot_backup_check
+
+- name: Assert every discovered boot volume has today's backup in AVAILABLE state
+  ansible.builtin.assert:
+    that:
+      - item.boot_volume_backups | selectattr('lifecycle_state', 'equalto', 'AVAILABLE') | list | length > 0
+    fail_msg: >-
+      No AVAILABLE boot volume backup named {{ maintenance_oci_backup_boot_backup_name }}
+      was found for boot volume {{ item.item.boot_volume_id }}. A backup task that ran
+      without producing a verified restore point must not report success (invariant I1).
+    success_msg: >-
+      Boot volume {{ item.item.boot_volume_id }} has an AVAILABLE backup named
+      {{ maintenance_oci_backup_boot_backup_name }}.
+  loop: "{{ maintenance_oci_backup_boot_backup_check.results }}"
+  loop_control:
+    label: "{{ item.item.boot_volume_id }}"
+  ignore_errors: "{{ ansible_check_mode }}"
+
+- name: Fetch today's block volume backup(s) by exact name to confirm they are AVAILABLE
+  oracle.oci.oci_blockstorage_volume_backup_facts:
+    compartment_id: "{{ maintenance_oci_backup_compartment_id }}"
+    volume_id: "{{ item.item.volume_id }}"
+    display_name: >-
+      {{ maintenance_oci_backup_name_prefix }}-{{ inventory_hostname_short }}-block-{{
+      item.volumes[0].display_name }}-{{ ansible_facts['date_time'].date | replace('-', '') }}
+    tenancy: "{{ maintenance_oci_backup_tenancy }}"
+    region: "{{ maintenance_oci_backup_region }}"
+    api_user: "{{ maintenance_oci_backup_api_user }}"
+    api_user_fingerprint: "{{ maintenance_oci_backup_api_user_fingerprint }}"
+    api_user_key_file: "{{ maintenance_oci_backup_key_file }}"
+  loop: "{{ maintenance_oci_backup_block_volume_facts.results }}"
+  loop_control:
+    label: "{{ item.item.volume_id }}"
+  delegate_to: localhost
+  become: false
+  when: maintenance_oci_backup_include_block_volumes | bool
+  register: maintenance_oci_backup_block_backup_check
+
+- name: Assert every discovered block volume has today's backup in AVAILABLE state
+  ansible.builtin.assert:
+    that:
+      - item.volume_backups | selectattr('lifecycle_state', 'equalto', 'AVAILABLE') | list | length > 0
+    fail_msg: >-
+      No AVAILABLE block volume backup was found for volume {{ item.item.item.volume_id }}.
+      A backup task that ran without producing a verified restore point must not report
+      success (invariant I1).
+    success_msg: "Volume {{ item.item.item.volume_id }} has an AVAILABLE backup."
+  loop: "{{ maintenance_oci_backup_block_backup_check.results }}"
+  loop_control:
+    label: "{{ item.item.item.volume_id }}"
+  when: maintenance_oci_backup_include_block_volumes | bool
+  ignore_errors: "{{ ansible_check_mode }}"

@@ -1,0 +1,45 @@
+---
+# tasks file for assert
+
+# Gated behind maintenance_oci_backup_enable in tasks/main.yml, alongside
+# every other include here - required so tests/test.yml can invoke the
+# role with maintenance_oci_backup_enable: false and no credentials at all
+# without this file failing the run for lack of them.
+
+- name: Assert compartment_id is set
+  ansible.builtin.assert:
+    that:
+      - maintenance_oci_backup_compartment_id | length > 0
+    fail_msg: >-
+      maintenance_oci_backup_compartment_id is required whenever this role
+      does anything (backup or prune) - it is not derivable from the
+      instance OCID alone. Set it to the OCID of the compartment the
+      instance and its backups live in.
+    success_msg: "maintenance_oci_backup_compartment_id is set."
+
+- name: Assert OCI API-key auth parameters are set
+  ansible.builtin.assert:
+    that:
+      - maintenance_oci_backup_tenancy | length > 0
+      - maintenance_oci_backup_region | length > 0
+      - maintenance_oci_backup_api_user | length > 0
+      - maintenance_oci_backup_api_user_fingerprint | length > 0
+      - maintenance_oci_backup_api_user_key_content | length > 0
+    fail_msg: >-
+      One or more OCI API-key auth parameters are missing or empty
+      (maintenance_oci_backup_tenancy, _region, _api_user,
+      _api_user_fingerprint, _api_user_key_content). All five are required
+      for API-key authentication against OCI from a control node outside
+      OCI - see tasks/auth.ansible.yml.
+    success_msg: "OCI API-key auth parameters are set."
+
+- name: Assert instance_id is set when a backup will be taken
+  ansible.builtin.assert:
+    that:
+      - maintenance_oci_backup_instance_id | length > 0
+    fail_msg: >-
+      maintenance_oci_backup_run_backup is true but
+      maintenance_oci_backup_instance_id is empty. Set it to the OCID of
+      the instance to back up.
+    success_msg: "maintenance_oci_backup_instance_id is set."
+  when: maintenance_oci_backup_run_backup | bool

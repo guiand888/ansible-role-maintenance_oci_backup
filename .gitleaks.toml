@@ -1,0 +1,14 @@
+title = "ansible-gafr gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Known-safe patterns for this repo"
+regexes = [
+  # ansible-vault ciphertext is the point of vaulting secrets; it is not a leak.
+  '''\$ANSIBLE_VAULT;1\.1;AES256''',
+  # SSH *public* keys (vars/cert_gateway/accounts.yml) are meant to be plaintext.
+  '''ssh-ed25519 AAAA[0-9A-Za-z+/]+''',
+  '''ssh-rsa AAAA[0-9A-Za-z+/]+''',
+]

@@ -1,0 +1,12 @@
+---
+# tasks file for maintenance_oci_backup
+
+- name: Include required-variable assertions
+  ansible.builtin.include_tasks: assert.ansible.yml
+  when: maintenance_oci_backup_enable | bool
+
+- name: Include auth material setup, backup/prune execution, and auth cleanup
+  ansible.builtin.include_tasks: auth.ansible.yml
+  when:
+    - maintenance_oci_backup_enable | bool
+    - maintenance_oci_backup_run_backup | bool or maintenance_oci_backup_run_prune | bool

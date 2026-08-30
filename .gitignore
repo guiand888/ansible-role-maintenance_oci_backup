@@ -1,0 +1,28 @@
+# Ansible runtime state
+.ansible/
+*.retry
+
+# Python / venv
+venv/
+.venv/
+__pycache__/
+*.pyc
+
+# Nix
+.direnv/
+result
+result-*
+
+# Editors / IDEs
+.vscode/
+.idea/
+
+# Agent / assistant tooling
+.claude
+.vibe
+
+# OS cruft
+.DS_Store
+
+# Local, unpublishable secrets/examples — never committed
+group_vars.example.local.yml
