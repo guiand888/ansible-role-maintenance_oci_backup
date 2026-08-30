@@ -39,7 +39,7 @@ All required variables are enforced by `ansible.builtin.assert` in `tasks/assert
 | `maintenance_oci_backup_name_prefix`             | `"maint"`      | Prefix for every object this role creates, so pruning can be scoped safely to only ever touch objects this role created. |
 | `maintenance_oci_backup_type`                    | `"INCREMENTAL"`| Backup type passed to the OCI modules. |
 | `maintenance_oci_backup_retention_days`          | `14`           | Backups older than this, whose name starts with `maintenance_oci_backup_name_prefix`, are eligible for pruning. Must be `> 0` (enforced by an assert in `tasks/prune.ansible.yml`). |
-| `maintenance_oci_backup_include_block_volumes`   | `true`         | Also back up every block volume attached to the instance, not just the boot volume. |
+| `maintenance_oci_backup_include_block_volumes`   | `true`         | Also back up every block volume attached to the instance, not just the boot volume. Does **not** gate pruning: pruning always covers both boot and block backups already sitting in the compartment, so turning this off later doesn't silently stop cleanup of block backups created before it was. |
 | `maintenance_oci_backup_wait`                    | `true`         | Wait for each backup to reach a terminal state before moving on. |
 | `maintenance_oci_backup_wait_timeout`            | `1800`         | Seconds to wait when `maintenance_oci_backup_wait` is `true`. |
 
